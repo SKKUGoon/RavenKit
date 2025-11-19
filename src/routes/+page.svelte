@@ -1,4 +1,6 @@
 <script lang="ts">
+	import DataExtractorTable from '$lib/components/data-extractor/DataExtractorTable.svelte';
+
 	type Tool = {
 		id: string;
 		name: string;
@@ -43,9 +45,9 @@
 	let selectedTool: Tool = tools[0];
 </script>
 
-<main class="min-h-screen bg-slate-950 text-slate-50">
+<main class="min-h-screen bg-slate-950 py-12 text-slate-50">
 	<div
-		class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-4 py-12 sm:px-6 lg:flex-row lg:items-stretch lg:px-8"
+		class="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 sm:px-6 lg:flex-row lg:items-start lg:justify-center lg:px-8"
 	>
 		<aside
 			class="flex min-h-full w-full shrink-0 flex-col self-stretch rounded-3xl border border-slate-800 bg-slate-900/80 p-5 lg:w-64"
@@ -94,6 +96,10 @@
 					</ul>
 				</div>
 			</div>
+
+			{#if selectedTool.id === 'data-extractor'}
+				<DataExtractorTable />
+			{/if}
 		</section>
 	</div>
 </main>
