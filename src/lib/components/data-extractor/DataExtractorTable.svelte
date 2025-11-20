@@ -13,6 +13,15 @@
 		DataExtractorUpload
 	} from '$lib/types/data-extractor';
 
+	type ExtractRowResponse = {
+		rowId: number | null;
+		filename: string;
+		uploadId: string;
+		response: Record<string, unknown> | null;
+		outputText: string | null;
+		error: string | null;
+	};
+
 	const INITIAL_COLUMN_COUNT = 4;
 	const COLUMN_MIN_WIDTH = 208;
 	const INDEX_COLUMN_WIDTH = 320;
@@ -105,12 +114,13 @@
 	const columnKey = (column: DataExtractorColumn) =>
 		column.name?.trim() ? column.name.trim().replace(/\s+/g, '_').toLowerCase() : `column_${column.id}`;
 
-	const applyExtractionResults = (results: Record<string, string>) => {
+	const applyExtractionResults = (results: Record<string, string>, targetRowId?: number | null) => {
 		if (!Object.keys(results).length) return;
-		const targetRowId = uploads[0]?.rowId ?? rows[0]?.id;
-		if (!targetRowId) return;
+		const fallbackRowId = uploads[0]?.rowId ?? rows[0]?.id ?? null;
+		const resolvedRowId = typeof targetRowId === 'number' ? targetRowId : fallbackRowId;
+		if (!resolvedRowId) return;
 		rows = rows.map((row) => {
-			if (row.id !== targetRowId) return row;
+			if (row.id !== resolvedRowId) return row;
 			const updatedValues = { ...row.values };
 			columns.forEach((column, index) => {
 				const key = columnKey(column);
@@ -184,19 +194,60 @@
 			if (payload.responseFormat) {
 				responseFormatPreview = JSON.stringify(payload.responseFormat, null, 2);
 			}
-			const responseData = payload.response as {
-				output_text?: string;
-			};
-			const outputText = responseData?.output_text;
-			if (outputText) {
-				try {
-					const parsed = JSON.parse(outputText) as Record<string, string>;
-					applyExtractionResults(parsed);
-				} catch (parseError) {
-					console.warn('Failed to parse extraction output', parseError);
+			const rowResponsesValue = (payload as { rowResponses?: unknown }).rowResponses;
+			const rawRowResponses: ExtractRowResponse[] = Array.isArray(rowResponsesValue)
+				? (rowResponsesValue as ExtractRowResponse[])
+				: [];
+			let successfulRows = 0;
+			if (rawRowResponses.length > 0) {
+				for (const rowResponse of rawRowResponses) {
+					if (!rowResponse || typeof rowResponse !== 'object') continue;
+					const outputText =
+						typeof rowResponse.outputText === 'string' && rowResponse.outputText.trim().length
+							? rowResponse.outputText
+							: null;
+					if (!outputText) continue;
+					try {
+						const parsed = JSON.parse(outputText) as Record<string, string>;
+						applyExtractionResults(parsed, rowResponse.rowId);
+						successfulRows += 1;
+					} catch (parseError) {
+						console.warn(
+							'Failed to parse extraction output for row',
+							rowResponse.rowId,
+							parseError
+						);
+					}
+				}
+			} else {
+				const responseData = payload.response as {
+					output_text?: string;
+				};
+				const outputText = responseData?.output_text;
+				if (outputText) {
+					try {
+						const parsed = JSON.parse(outputText) as Record<string, string>;
+						applyExtractionResults(parsed);
+						successfulRows += 1;
+					} catch (parseError) {
+						console.warn('Failed to parse extraction output', parseError);
+					}
 				}
 			}
-			updateStatus('Extraction complete.');
+			const failedRows = rawRowResponses.filter((rowResponse) => rowResponse?.error);
+			if (failedRows.length && successfulRows === 0) {
+				extractionError = `Failed to extract ${failedRows
+					.map((row) => row?.filename || 'document')
+					.join(', ')}.`;
+				updateStatus('Extraction failed for all documents.');
+			} else if (failedRows.length) {
+				extractionError = `Partial success. Check these documents: ${failedRows
+					.map((row) => row?.filename || 'document')
+					.join(', ')}.`;
+				updateStatus('Extraction completed with partial results.');
+			} else {
+				updateStatus('Extraction complete.');
+			}
 		} catch (error) {
 			extractionError =
 				error instanceof Error ? error.message : 'Unexpected error while extracting data.';

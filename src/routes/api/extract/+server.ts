@@ -121,35 +121,106 @@ export const POST: RequestHandler = async ({ request }) => {
 		});
 	}
 
-	const responsePayload: Record<string, unknown> = {
-		model: 'gpt-5-nano',
-		input: [
-			{
-				role: 'user',
-				content: [
-					...uploads.map((upload) => ({
-						type: 'input_file',
-						file_id: upload.id
-					})),
-					{
-						type: 'input_text',
-						text: prompt
-					}
-				]
-			}
-		],
-		text: {
-			format: responseFormat
+	const extractOutputText = (response: unknown): string | null => {
+		if (!response || typeof response !== 'object' || response === null) {
+			return null;
 		}
+
+		const directOutput = (response as { output_text?: string | string[] }).output_text;
+		if (typeof directOutput === 'string') {
+			return directOutput;
+		}
+		if (Array.isArray(directOutput)) {
+			const joined = directOutput.join('\n').trim();
+			return joined.length ? joined : null;
+		}
+
+		const structuredOutput = (response as {
+			output?: Array<{
+				content?: Array<{
+					text?: string;
+				}>;
+			}>;
+		}).output;
+
+		if (Array.isArray(structuredOutput)) {
+			for (const block of structuredOutput) {
+				if (!block || typeof block !== 'object') continue;
+				const content = (block as { content?: Array<{ text?: string }> }).content;
+				if (!Array.isArray(content)) continue;
+				for (const item of content) {
+					if (item && typeof item === 'object' && typeof item.text === 'string') {
+						return item.text;
+					}
+				}
+			}
+		}
+
+		return null;
 	};
 
-	console.log(responsePayload);
-	const response = await openai.responses.create(responsePayload as never);
+	const rowResponses: {
+		rowId: number | null;
+		filename: string;
+		uploadId: string;
+		response: unknown | null;
+		outputText: string | null;
+		error: string | null;
+	}[] = [];
+
+	for (const upload of uploads) {
+		const responsePayload: Record<string, unknown> = {
+			model: 'gpt-5-nano',
+			input: [
+				{
+					role: 'user',
+					content: [
+						{
+							type: 'input_file',
+							file_id: upload.id
+						},
+						{
+							type: 'input_text',
+							text: prompt
+						}
+					]
+				}
+			],
+			text: {
+				format: responseFormat
+			}
+		};
+
+		try {
+			const response = await openai.responses.create(responsePayload as never);
+			rowResponses.push({
+				rowId: upload.rowId,
+				filename: upload.filename,
+				uploadId: upload.id,
+				response,
+				outputText: extractOutputText(response),
+				error: null
+			});
+		} catch (requestError) {
+			rowResponses.push({
+				rowId: upload.rowId,
+				filename: upload.filename,
+				uploadId: upload.id,
+				response: null,
+				outputText: null,
+				error:
+					requestError instanceof Error
+						? requestError.message
+						: 'Failed to extract data for the document.'
+			});
+		}
+	}
 
 	return json({
 		prompt,
 		responseFormat,
-		response,
+		response: rowResponses[0]?.response ?? null,
+		rowResponses,
 		uploads,
 		rows,
 		activeColumns
